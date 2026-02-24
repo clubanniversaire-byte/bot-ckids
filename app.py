@@ -1,10 +1,13 @@
 import os
+import requests
 from flask import Flask, request, make_response
 
 app = Flask(__name__)
 
-# זה הקוד שאתה ממציא כדי לאמת את החיבור מול מטא
-VERIFY_TOKEN = "MY_SECRET_TOKEN_123" 
+# הגדרות - תדביק כאן את ה-Token הארוך שלך ממטא
+ACCESS_TOKEN = "EAAW2ooQSqLoBQxVE7U6YAYFQPSpbrxFS2CLL3AS47Fe2rZC9Ho2wuEYBFTdyzM4NFj61BBWtlWg4ZAvb73YnRnZBRsu4pNfTVJCsNxCnwJHNJDEEoLKu0bl9nHU7mEu3ln7SiM6iIlt8IlWoZA9nTnUBu9khZAhdNnknxsgzn8ZB0bVbom70y8OgNa20Hmsk76xKT6QmUVqZCyg1gQUUZB8HNsTxYXLzCaoIyztJ2sD34W1DrQ837PkbiDrRCZCZCbFvfzDBqf5w18xTEgti7N3WsRKeaqZCikZD"
+PHONE_NUMBER_ID = "1000407146489466"
+VERIFY_TOKEN = "MY_SECRET_TOKEN_123"
 
 @app.route("/", methods=["GET"])
 def home():
@@ -15,20 +18,42 @@ def verify_webhook():
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
-
-    if mode and token:
-        if mode == "subscribe" and token == VERIFY_TOKEN:
-            return make_response(challenge, 200)
-        else:
-            return make_response("Verification failed", 403)
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return make_response(challenge, 200)
+    return make_response("Verification failed", 403)
 
 @app.route("/webhook", methods=["POST"])
 def message_received():
     data = request.get_json()
-    print("Received message:", data)
+    
+    # בדיקה שיש הודעה נכנסת (ולא סתם סטטוס)
+    if data.get("entry") and data["entry"][0].get("changes") and data["entry"][0]["changes"][0]["value"].get("messages"):
+        message = data["entry"][0]["changes"][0]["value"]["messages"][0]
+        from_number = message["from"]  # המספר של השולח
+        text_body = message["text"]["body"]  # התוכן שהוא כתב
+        
+        print(f"קיבלתי הודעה מ-{from_number}: {text_body}")
+        
+        # שליחת תשובה
+        send_whatsapp_message(from_number, f"קיבלתי את ההודעה שלך: {text_body}")
+
     return make_response("EVENT_RECEIVED", 200)
 
+def send_whatsapp_message(to, text):
+    url = f"https://graph.facebook.com/v22.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {"body": text}
+    }
+    response = requests.post(url, json=payload, headers=headers)
+    print(f"תגובת שליחה: {response.status_code}, {response.text}")
+
 if __name__ == "__main__":
-    # התיקון הקריטי: Render דורש לקרוא את הפורט מהסביבה
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
