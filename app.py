@@ -4,8 +4,8 @@ from flask import Flask, request, make_response
 
 app = Flask(__name__)
 
-# הגדרות - תדביק כאן את ה-Token הארוך שלך ממטא
-ACCESS_TOKEN = "EAAW2ooQSqLoBQxVE7U6YAYFQPSpbrxFS2CLL3AS47Fe2rZC9Ho2wuEYBFTdyzM4NFj61BBWtlWg4ZAvb73YnRnZBRsu4pNfTVJCsNxCnwJHNJDEEoLKu0bl9nHU7mEu3ln7SiM6iIlt8IlWoZA9nTnUBu9khZAhdNnknxsgzn8ZB0bVbom70y8OgNa20Hmsk76xKT6QmUVqZCyg1gQUUZB8HNsTxYXLzCaoIyztJ2sD34W1DrQ837PkbiDrRCZCZCbFvfzDBqf5w18xTEgti7N3WsRKeaqZCikZD"
+# הגדרות - המערכת תמשוך את הטוקן מה-Environment Variables שהגדרת ב-Render
+ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
 PHONE_NUMBER_ID = "1000407146489466"
 VERIFY_TOKEN = "MY_SECRET_TOKEN_123"
 
@@ -57,3 +57,4 @@ def send_whatsapp_message(to, text):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
