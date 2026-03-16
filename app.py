@@ -10,6 +10,9 @@ PHONE_NUMBER_ID = "1000407146489466"
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "MY_SECRET_TOKEN_123")
 GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbzqQgKCbf88Um6zNjNkVZoaxNwk3Qfa_R3ffqVFD7LbIP2GjZvS9c5o05J_27DJvWu_/exec"
 
+# המספר של המנהל שאליו ישלח הסיכום (חייב להיות בלי + בהתחלה)
+ADMIN_PHONE = "33783963947"
+
 @app.route("/", methods=["GET"])
 def home():
     return "Bot is running!", 200
@@ -36,7 +39,7 @@ def message_received():
             text_body = message["text"]["body"].strip() # שומר על המקור לצורך שמירה בגיליון
             text_lower = text_body.lower() # לשימוש בלוגיקת התשובות
             
-            print(f"הודעה נכנסת: {text_body}")
+            print(f"הודעה נכנסת: {text_body} מאת: {from_number}")
 
             # 1. שמירת ההודעה בגוגל שיטס
             save_to_google_sheets(from_number, text_body)
@@ -48,10 +51,19 @@ def message_received():
                 reply_text = "Ça va très bien, merci ! Et toi ?"
             elif "merci" in text_lower:
                 reply_text = "Avec plaisir ! 😊"
+            elif text_lower == "fin":
+                # כאן אנחנו תופסים את סיום השיחה!
+                reply_text = "Merci ! J'ai transféré votre demande à notre équipe. On vous contacte vite."
+                
+                # יצירת הודעת הסיכום למנהל
+                summary_text = f"🚨 התראה למנהל: לקוח עם המספר {from_number} סיים כעת שיחה עם הבוט וביקש שיחזרו אליו."
+                
+                # שליחת הסיכום למנהל
+                send_whatsapp_message(ADMIN_PHONE, summary_text)
             else:
-                reply_text = f"Désolé, je ne comprends pas '{text_body}'. Essayez de dire 'Salut' !"
+                reply_text = f"Désolé, je ne comprends pas '{text_body}'. Essayez de dire 'Salut' ou tapez 'fin' pour terminer la discussion."
 
-            # 3. שליחת התשובה בוואטסאפ
+            # 3. שליחת התשובה ללקוח בוואטסאפ
             send_whatsapp_message(from_number, reply_text)
 
     return make_response("EVENT_RECEIVED", 200)
@@ -63,7 +75,6 @@ def save_to_google_sheets(from_number, text):
         "text": text
     }
     try:
-        # שליחת POST לקישור שסיפקת
         response = requests.post(GOOGLE_SHEET_URL, json=payload)
         print(f"סטטוס שמירה בגוגל שיטס: {response.status_code}")
     except Exception as e:
@@ -82,7 +93,7 @@ def send_whatsapp_message(to, text):
         "text": {"body": text}
     }
     response = requests.post(url, json=payload, headers=headers)
-    print(f"סטטוס שליחה בוואטסאפ: {response.status_code}")
+    print(f"סטטוס שליחה ל-{to}: {response.status_code}")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
