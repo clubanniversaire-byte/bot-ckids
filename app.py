@@ -3,10 +3,10 @@ import requests
 from flask import Flask, request, make_response
 
 app = Flask(__name__)
-
+# 
 # הגדרות - המערכת תמשוך את המידע מה-Environment Variables ב-Render
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
-PHONE_NUMBER_ID = "1089400387587213"
+PHONE_NUMBER_ID = "1063229346878648"
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "MY_SECRET_TOKEN_123")
 GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbzqQgKCbf88Um6zNjNkVZoaxNwk3Qfa_R3ffqVFD7LbIP2GjZvS9c5o05J_27DJvWu_/exec"
 
