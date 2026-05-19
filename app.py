@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from datetime import datetime
 from flask import Flask, request, make_response
@@ -8,6 +9,9 @@ app = Flask(__name__)
 # ==========================================
 # קונפיגורציה והגדרות משתנים
 # ==========================================
+# משתנה שליטה: True = מציג שגיאות טכניות (בשבילך). False = מצב לקוח אמיתי (הודעות אנושיות)
+DEBUG_MODE = True 
+
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "MY_SECRET_TOKEN_123")
@@ -15,10 +19,9 @@ GOOGLE_SHEET_URL = os.environ.get("GOOGLE_SHEET_URL")
 ADMIN_PHONE = os.environ.get("ADMIN_PHONE")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# הגדרת המודל המעודכן (המודל הקודם 1.5 פלאש כבר לא נתמך ב-API)
 GEMINI_MODEL = "gemini-2.5-flash"
 
-# קונפיגורציה של רוז ביוטי (מצב 1)
+# קונפיגורציה של רוז ביוטי
 SHOP_URL = os.environ.get("SHOP_URL", "https://ros-beauty.co.il/")
 PICKUP_LOCATION_TEXT = os.environ.get("PICKUP_LOCATION_TEXT", "אקדמיה")
 GEL_COURSE_URL = os.environ.get("GEL_COURSE_URL", "https://ros-beauty.co.il/product/%D7%A7%D7%95%D7%A8%D7%A1-%E2%81%A0nails-master/")
@@ -52,20 +55,18 @@ def get_ros_beauty_welcome():
     )
 
 def ask_gemini_chat(user_message):
-    """פונקציה למצב AI חופשי (איש המכירות)"""
+    """פונקציה למצב AI חופשי עם מנגנון הגנה מעומסים וקריסה אלגנטית"""
     if not GEMINI_API_KEY:
         return "שגיאה: משתנה GEMINI_API_KEY לא מוגדר בשרת Render."
         
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     
     system_instruction = (
-        "אתה נציג מכירות וירטואלי חכם, כריזמטי, מקצועי ואדיב של סוכנות האוטומציה וה-AI שלי (הסוכנות של המפתח שבנה אותך). "
+        "אתה נציג מכירות וירטואלי חכם, כריזמטי, מקצועי ואדיב של סוכנות האוטומציה וה-AI שלי. "
         "התפקיד שלך הוא לנהל שיחה חופשית וקולחת עם בעלי עסקים שמנסים את הבוט כרגע. "
-        "תסביר להם בשפה ברורה (עברית) איך בוטים חכמים ואוטומציות יכולים לחסוך לעסק שלהם המון זמן, לענות ללקוחות 24/7, "
-        "למנוע עומס משירות הלקוחות ולסגור לידים אוטומטית. "
-        "התשובות שלך צריכות להיות קצרות, ממוקדות ומותאמות לוואטסאפ (בלי פסקאות ארוכות מדי). "
-        "המטרה הסופית שלך בשיחה היא לעניין אותם, ובשלב מתקדם להציע להם להשאיר שם ומספר טלפון כדי שהמפתח (הבעלים של הסוכנות) יחזור אליהם לשיחת ייעוץ בחינם. "
-        "אם הם משאירים פרטים, תודה להם ותגיד שנחזור אליהם בקרוב."
+        "תסביר להם בשפה ברורה (עברית) איך בוטים חכמים ואוטומציות יכולים לחסוך לעסק שלהם המון זמן. "
+        "התשובות שלך צריכות להיות קצרות, ממוקדות ומותאמות לוואטסאפ. "
+        "המטרה הסופית היא להציע להם להשאיר שם ומספר טלפון כדי שנחזור אליהם לשיחת ייעוץ בחינם."
     )
     
     payload = {
@@ -73,22 +74,39 @@ def ask_gemini_chat(user_message):
         "systemInstruction": {"parts": [{"text": system_instruction}]}
     }
     
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        res_json = response.json()
-        
-        if "error" in res_json:
-            error_msg = res_json["error"].get("message", "Unknown error")
-            print("Gemini API Error:", error_msg)
-            return f"❌ שגיאת API מג'מיני: {error_msg}\n(בדוק את הגדרות השרת ב-Render)"
+    # מנגנון Retry - מנסה עד 3 פעמים אם יש עומס
+    for attempt in range(3):
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+            res_json = response.json()
             
-        return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-    except Exception as e:
-        print(f"Gemini Exception: {e}")
-        return "מצטער, חלה שגיאה בחיבור ה-AI."
+            if "error" in res_json:
+                error_msg = res_json["error"].get("message", "Unknown error")
+                print(f"Gemini API Error (Attempt {attempt+1}):", error_msg)
+                
+                # אם מדובר בשגיאת עומס, נמתין שנייה וננסה שוב
+                if "high demand" in error_msg.lower() or "quota" in error_msg.lower() or response.status_code == 429:
+                    time.sleep(1)
+                    continue
+                
+                # אם זו שגיאה אחרת ולא עומס, נעצור ונחזיר פלט לפי המצב
+                if DEBUG_MODE:
+                    return f"❌ שגיאת API מג'מיני: {error_msg}"
+                return "אופס, חלה שגיאה זמנית בחיבור. נסה לשלוח שוב את ההודעה בעוד רגע! ✨"
+                
+            return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            
+        except Exception as e:
+            print(f"Gemini Exception (Attempt {attempt+1}): {e}")
+            if attempt < 2:
+                time.sleep(1)
+            else:
+                if DEBUG_MODE:
+                    return f"❌ שגיאת מערכת (Exception): {e}"
+                return "מצטער, השרת חווה עומס רגעי. נסה שוב בעוד כמה שניות. ✨"
 
 def classify_intent_with_gemini(user_message):
-    """פונקציה נסתרת למצב ההיברידי - הופכת טקסט חופשי למספר תפריט"""
+    """פונקציה נסתרת לנתב השיחות - כוללת מנגנון הגנה מפני קריסות שרת"""
     if not GEMINI_API_KEY: return None
         
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
@@ -108,24 +126,27 @@ def classify_intent_with_gemini(user_message):
     """
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     
-    try:
-        response = requests.post(url, json=payload, timeout=5)
-        res_json = response.json()
-        if "error" in res_json:
-            print("Intent Classification Error:", res_json["error"].get("message"))
+    for attempt in range(3):
+        try:
+            response = requests.post(url, json=payload, timeout=5)
+            res_json = response.json()
+            if "error" in res_json:
+                print(f"Intent Classification Error (Attempt {attempt+1}):", res_json["error"].get("message"))
+                time.sleep(1)
+                continue
+            if "candidates" in res_json:
+                result = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+                if result in ["0", "1", "2", "3", "4", "5", "6"]:
+                    return result
             return None
-        if "candidates" in res_json:
-            result = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-            if result in ["0", "1", "2", "3", "4", "5", "6"]:
-                return result
-        return None
-    except Exception as e:
-        print(f"Intent Classification Exception: {e}")
-        return None
+        except Exception as e:
+            print(f"Intent Classification Exception (Attempt {attempt+1}): {e}")
+            if attempt < 2: time.sleep(1)
+    return None # במקרה של קריסה מוחלטת, נחזיר None והבוט המובנה פשוט יציג שוב את התפריט באלגנטיות
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Showcase Agency Bot is Live!", 200
+    return "Showcase Agency Bot is Live and Protected!", 200
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
@@ -208,8 +229,10 @@ def message_received():
                 USER_STATES[from_number]["state"] = "GENERAL_GET_MSG"
                 send_whatsapp_message(from_number, "נא לכתוב את פנייתך בפירוט:")
             else:
+                # אם ה-AI נכשל והטקסט לא היה מספר חוקי, נחזיר את תפריט הבית באלגנטיות
                 send_whatsapp_message(from_number, get_ros_beauty_welcome())
 
+        # ... (שאר חלקי הלוגיקה של רוז ביוטי נשמרים זהים לחלוטין)
         elif current_state == "ORDER_STATUS_CHECK":
             if text_body == "2":
                 send_whatsapp_message(from_number, "שמחות לשמוע 💙\n*(כתוב 'התחלה' כדי לחזור לשער)*")
