@@ -15,6 +15,9 @@ GOOGLE_SHEET_URL = os.environ.get("GOOGLE_SHEET_URL")
 ADMIN_PHONE = os.environ.get("ADMIN_PHONE")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+# הגדרת המודל המעודכן (המודל הקודם 1.5 פלאש כבר לא נתמך ב-API)
+GEMINI_MODEL = "gemini-2.5-flash"
+
 # קונפיגורציה של רוז ביוטי (מצב 1)
 SHOP_URL = os.environ.get("SHOP_URL", "https://ros-beauty.co.il/")
 PICKUP_LOCATION_TEXT = os.environ.get("PICKUP_LOCATION_TEXT", "אקדמיה")
@@ -53,8 +56,17 @@ def ask_gemini_chat(user_message):
     if not GEMINI_API_KEY:
         return "שגיאה: משתנה GEMINI_API_KEY לא מוגדר בשרת Render."
         
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    system_instruction = "אתה נציג מכירות וירטואלי אדיב של סוכנות AI..."
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    
+    system_instruction = (
+        "אתה נציג מכירות וירטואלי חכם, כריזמטי, מקצועי ואדיב של סוכנות האוטומציה וה-AI שלי (הסוכנות של המפתח שבנה אותך). "
+        "התפקיד שלך הוא לנהל שיחה חופשית וקולחת עם בעלי עסקים שמנסים את הבוט כרגע. "
+        "תסביר להם בשפה ברורה (עברית) איך בוטים חכמים ואוטומציות יכולים לחסוך לעסק שלהם המון זמן, לענות ללקוחות 24/7, "
+        "למנוע עומס משירות הלקוחות ולסגור לידים אוטומטית. "
+        "התשובות שלך צריכות להיות קצרות, ממוקדות ומותאמות לוואטסאפ (בלי פסקאות ארוכות מדי). "
+        "המטרה הסופית שלך בשיחה היא לעניין אותם, ובשלב מתקדם להציע להם להשאיר שם ומספר טלפון כדי שהמפתח (הבעלים של הסוכנות) יחזור אליהם לשיחת ייעוץ בחינם. "
+        "אם הם משאירים פרטים, תודה להם ותגיד שנחזור אליהם בקרוב."
+    )
     
     payload = {
         "contents": [{"parts": [{"text": user_message}]}],
@@ -65,11 +77,10 @@ def ask_gemini_chat(user_message):
         response = requests.post(url, json=payload, timeout=10)
         res_json = response.json()
         
-        # תפיסת שגיאות מגוגל
         if "error" in res_json:
             error_msg = res_json["error"].get("message", "Unknown error")
             print("Gemini API Error:", error_msg)
-            return f"❌ שגיאת API מג'מיני: {error_msg}\n(בדוק את מפתח ה-API שלך ב-Render)"
+            return f"❌ שגיאת API מג'מיני: {error_msg}\n(בדוק את הגדרות השרת ב-Render)"
             
         return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
     except Exception as e:
@@ -80,7 +91,7 @@ def classify_intent_with_gemini(user_message):
     """פונקציה נסתרת למצב ההיברידי - הופכת טקסט חופשי למספר תפריט"""
     if not GEMINI_API_KEY: return None
         
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     
     prompt = f"""
     אתה נתב שיחות חכם. הלקוח כתב: "{user_message}"
@@ -100,12 +111,16 @@ def classify_intent_with_gemini(user_message):
     try:
         response = requests.post(url, json=payload, timeout=5)
         res_json = response.json()
+        if "error" in res_json:
+            print("Intent Classification Error:", res_json["error"].get("message"))
+            return None
         if "candidates" in res_json:
             result = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
             if result in ["0", "1", "2", "3", "4", "5", "6"]:
                 return result
         return None
-    except:
+    except Exception as e:
+        print(f"Intent Classification Exception: {e}")
         return None
 
 @app.route("/", methods=["GET"])
@@ -166,12 +181,11 @@ def message_received():
     # 3. מצב בוט מובנה (היברידי!)
     elif user_mode == "STRUCTURED":
         if current_state == "MAIN_MENU":
-            # ניתוב חכם: אם הלקוח לא כתב מספר במדויק, ה-AI ינסה להבין למה הוא התכוון
             choice = text_body
             if choice not in ["0", "1", "2", "3", "4", "5", "6"]:
                 ai_intent = classify_intent_with_gemini(text_body)
                 if ai_intent:
-                    choice = ai_intent # ה-AI זיהה כוונה!
+                    choice = ai_intent
             
             if choice == "0":
                 send_whatsapp_message(from_number, f"מעבר לאתר לרכישה 🛒:\n{SHOP_URL}")
@@ -196,7 +210,6 @@ def message_received():
             else:
                 send_whatsapp_message(from_number, get_ros_beauty_welcome())
 
-        # ... (שאר הלוגיקה של רוז ביוטי נשארה זהה לחלוטין)
         elif current_state == "ORDER_STATUS_CHECK":
             if text_body == "2":
                 send_whatsapp_message(from_number, "שמחות לשמוע 💙\n*(כתוב 'התחלה' כדי לחזור לשער)*")
