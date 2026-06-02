@@ -10,6 +10,7 @@ app = Flask(__name__)
 # CONFIGURATION DES VARIABLES
 # ==========================================
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
+WHATSAPP_TOKEN = os.environ.get("ACCESS_TOKEN") # משמש להורדת מדיה
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "MY_SECRET_TOKEN_123")
 ADMIN_PHONE = os.environ.get("ADMIN_PHONE")
@@ -22,51 +23,65 @@ WC_CONSUMER_SECRET = os.environ.get("WC_CONSUMER_SECRET")
 
 USER_STATES = {}
 
-def get_welcome_menu():
-    return f"""👋 *Bonjour ! Bienvenue sur notre service client* ✨
-Comment puis-je vous aider aujourd'hui ? Veuillez choisir une option :
-
-1️⃣ *J'ai une question concernant une commande existante* 📦
-2️⃣ *J'ai une autre question générale* ❓
-
-💡 _Vous pouvez écrire *Début* à tout moment pour revenir ici._"""
+def get_media_url(media_id):
+    """שליפת הקישור הישיר לתמונה שנשלחה על ידי המשתמש"""
+    url = f"https://graph.facebook.com/v20.0/{media_id}"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    try:
+        res = requests.get(url, headers=headers)
+        if res.status_code == 200:
+            return res.json().get("url")
+    except Exception as e:
+        print(f"Erreur media URL: {e}")
+    return None
 
 def get_woocommerce_order(order_id):
-    """שיטת חיבור מעודכנת שעוקפת חסימות שרת (Parameters במקום Headers)"""
     if not WC_STORE_URL or not WC_CONSUMER_KEY or not WC_CONSUMER_SECRET:
-        print("Erreur: Variables WooCommerce manquantes sur le serveur Render.")
         return None
-        
-    # בניית הקישור מחדש כאשר המפתחות מוזרקים ישירות לתוך הכתובת
     base_url = f"{WC_STORE_URL.rstrip('/')}/wp-json/wc/v3/orders/{order_id}"
-    params = {
-        "consumer_key": WC_CONSUMER_KEY,
-        "consumer_secret": WC_CONSUMER_SECRET
-    }
-    
-    # שליחת הבקשה עם דפדפן מדומה (User-Agent) כדי שהשרת לא יחשוד
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-    
+    params = {"consumer_key": WC_CONSUMER_KEY, "consumer_secret": WC_CONSUMER_SECRET}
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
         response = requests.get(base_url, params=params, headers=headers, timeout=10)
-        print(f"Tentative de connexion à l'API - Code retour: {response.status_code}")
-        
-        if response.status_code == 200:
-            return response.json()
-        elif response.status_code == 404:
-            return "NOT_FOUND"
-        else:
-            print(f"WordPress Error Code: {response.status_code}")
-            return None
+        if response.status_code == 200: return response.json()
+        if response.status_code == 404: return "NOT_FOUND"
+        return None
     except Exception as e:
-        print(f"Exception WooCommerce: {e}")
         return None
 
+def send_whatsapp_btn(to, text, buttons):
+    """שליחת כפתורים לחיצים בוואטסאפ (מקסימום 3 כפתורים)"""
+    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
+    
+    formatted_buttons = []
+    for i, btn_text in enumerate(buttons):
+        formatted_buttons.append({
+            "type": "reply",
+            "reply": {"id": f"btn_{i+1}", "title": btn_text[:20]} # הגבלה של פייסבוק עד 20 תווים
+        })
+        
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": text},
+            "action": {"buttons": formatted_buttons}
+        }
+    }
+    response = requests.post(url, json=payload, headers=headers)
+    print(f"Boutons envoyés à {to}: {response.status_code}")
+
+def send_whatsapp_message(to, text):
+    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
+    payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text}}
+    requests.post(url, json=payload, headers=headers)
+
 @app.route("/", methods=["GET"])
-def home(): 
-    return "Le bot WhatsApp Français est en ligne, méthode de contournement active !", 200
+def home(): return "Bot Français interactif sans emails actif !", 200
 
 @app.route("/webhook", methods=["GET"])
 def verify():
@@ -82,148 +97,175 @@ def message_received():
 
     message = data["entry"][0]["changes"][0]["value"]["messages"][0]
     from_number = message["from"]
-    text_body = message["text"]["body"].strip() if message.get("type") == "text" else ""
+    
+    # בדיקה אם מדובר בלחיצת כפתור או בטקסט רגיל
+    text_body = ""
+    if message.get("type") == "interactive" and message["interactive"].get("button_reply"):
+        text_body = message["interactive"]["button_reply"]["title"].strip()
+    elif message.get("type") == "text":
+        text_body = message["text"]["body"].strip()
+        
     text_lower = text_body.lower()
 
-    # Mots-clés de réinitialisation
-    if text_lower in ["debut", "début", "start", "menu", "bonjour", "salut"]:
+    if text_lower in ["debut", "début", "start", "menu", "bonjour"]:
         USER_STATES[from_number] = {"state": "MAIN_MENU", "data": {}}
-        send_whatsapp_message(from_number, get_welcome_menu())
+        send_whatsapp_btn(from_number, "👋 *Bonjour ! Bienvenue sur notre service client* ✨\nComment puis-je vous aider aujourd'hui ?", ["Ma commande 📦", "Question générale ❓"])
         return make_response("EVENT_RECEIVED", 200)
 
     if from_number not in USER_STATES:
         USER_STATES[from_number] = {"state": "MAIN_MENU", "data": {}}
-        send_whatsapp_message(from_number, get_welcome_menu())
+        send_whatsapp_btn(from_number, "👋 *Bonjour ! Bienvenue sur notre service client* ✨\nComment puis-je vous aider aujourd'hui ?", ["Ma commande 📦", "Question générale ❓"])
         return make_response("EVENT_RECEIVED", 200)
 
     current_state = USER_STATES[from_number]["state"]
     user_data = USER_STATES[from_number]["data"]
 
-    # --- LOGIQUE DU BOT ---
-    
-    # 1. Menu Principal
+    # 1. תפריט ראשי
     if current_state == "MAIN_MENU":
-        if text_body == "1":
+        if "commande" in text_lower:
             USER_STATES[from_number]["state"] = "WAITING_FOR_ORDER_ID"
-            send_whatsapp_message(from_number, "Parfait. Pour que je puisse vérifier, veuillez saisir votre **numéro de commande** (uniquement les chiffres, ex: 4205) :")
-        elif text_body == "2":
+            send_whatsapp_message(from_number, "Parfait. Veuillez saisir votre **numéro de commande** (uniquement les chiffres, ex: 4205) :")
+        elif "générale" in text_lower or "generale" in text_lower:
             USER_STATES[from_number]["state"] = "GENERAL_QA"
-            send_whatsapp_message(from_number, "Avec plaisir ! Veuillez écrire votre question en détail ici, et notre équipe vous répondra dans les plus brefs délais 👇")
+            send_whatsapp_message(from_number, "Avec plaisir ! Veuillez écrire votre question en détail ici 👇")
         else:
-            send_whatsapp_message(from_number, "Veuillez choisir une option valide :\n1️⃣ Pour une commande\n2️⃣ Pour une question générale")
+            send_whatsapp_btn(from_number, "Veuillez choisir l'une des options suivantes :", ["Ma commande 📦", "Question générale ❓"])
 
-    # 2. Vérification de la commande sur WordPress
+    # 2. קבלת מספר הזמנה ומשיכת נתונים
     elif current_state == "WAITING_FOR_ORDER_ID":
         order_id = "".join(filter(str.isdigit, text_body))
-        
         if not order_id:
-            send_whatsapp_message(from_number, "Je n'ai pas compris le numéro de commande. Veuillez envoyer uniquement des chiffres (ex: 5014) :")
+            send_whatsapp_message(from_number, "Je n'ai pas compris. Veuillez envoyer uniquement les chiffres de votre commande :")
             return make_response("EVENT_RECEIVED", 200)
             
-        send_whatsapp_message(from_number, "C'est noté, je vérifie cela sur le site... Un instant ⏳")
-        
+        send_whatsapp_message(from_number, "Je vérifie cela sur le site... Un instant ⏳")
         order_info = get_woocommerce_order(order_id)
         
         if order_info == "NOT_FOUND":
-            send_whatsapp_message(from_number, f"❌ Je n'ai trouvé aucune commande avec le numéro {order_id}. Veuillez vérifier le numéro et réessayer :")
+            send_whatsapp_message(from_number, f"❌ Aucune commande trouvée avec le numéro {order_id}. Veuillez vérifier et réessayer :")
         elif order_info is None:
             user_data["order_id"] = order_id
+            user_data["customer_email"] = "Inconnu (Erreur Site)"
             USER_STATES[from_number]["state"] = "REPORT_ORDER_ISSUE"
-            error_fallback_msg = f"""Bien reçu, il s'agit de la commande {order_id}. Notre site subit un léger ralentissement et je n'ai pas pu récupérer le statut automatiquement.
-
-Veuillez détailler votre demande ou votre problème concernant cette commande, un conseiller va prendre le relais :"""
-            send_whatsapp_message(from_number, error_fallback_msg)
+            send_whatsapp_message(from_number, "Commande reçue, mais le site est ralenti. Veuillez détailler votre demande ici, un conseiller prend le relais :")
         else:
             status_translations = {
-                "pending": "En attente de paiement 💳",
-                "processing": "En cours de préparation 📦",
-                "on-hold": "En attente ⏳",
-                "completed": "Terminée et expédiée ! 🚀",
-                "cancelled": "Annulée ❌",
-                "refunded": "Remboursée 💰",
-                "failed": "Échouée ❌"
+                "pending": "En attente de paiement 💳", "processing": "En cours de préparation 📦",
+                "on-hold": "En attente ⏳", "completed": "Terminée et expédiée ! 🚀",
+                "cancelled": "Annulée ❌", "refunded": "Remboursée 💰", "failed": "Échouée ❌"
             }
-            
             raw_status = order_info.get("status", "unknown")
             translated_status = status_translations.get(raw_status, raw_status)
             total_price = order_info.get("total", "0")
             currency = order_info.get("currency", "€")
             customer_name = order_info.get("billing", {}).get("first_name", "Client")
+            customer_email = order_info.get("billing", {}).get("email", "Non spécifié")
+            
+            user_data["order_id"] = order_id
+            user_data["customer_email"] = customer_email
+            user_data["raw_info"] = f"Status: {translated_status}, Total: {total_price}"
             
             success_msg = f"""Bonjour {customer_name}, j'ai trouvé votre commande ! 📜
+🔹 *Statut :* {translated_status}
+🔹 *Montant :* {total_price} {currency}
+🔹 *Email lié :* {customer_email}
 
-🔹 *Numéro de commande :* {order_id}
-🔹 *Statut actuel :* {translated_status}
-🔹 *Montant total :* {total_price} {currency}
+Avez-vous une demande concernant cette commande ? Choisissez une option :"""
+            
+            USER_STATES[from_number]["state"] = "ORDER_MENU_OPTIONS"
+            send_whatsapp_btn(from_number, success_msg, ["Remarque spéciale 📝", "Livraison 🚚", "Produit défectueux ⚠️"])
 
-Tout est-il correct, ou avez-vous une autre question concernant cette commande ?
-1️⃣ Tout est correct, merci !
-2️⃣ J'ai un problème / besoin d'un conseiller"""
-
-            user_data["order_id"] = order_id
-            user_data["raw_info"] = f"Status: {translated_status}, Total: {total_price}"
-            USER_STATES[from_number]["state"] = "ORDER_FOLLOW_UP"
-            send_whatsapp_message(from_number, success_msg)
-
-    # 3. Options après affichage de la commande
-    elif current_state == "ORDER_FOLLOW_UP":
-        if text_body == "1":
-            send_whatsapp_message(from_number, "Ravi d'avoir pu vous aider ! 😊 Si vous avez besoin d'autre chose, écrivez simplement *Début*.")
-            USER_STATES[from_number] = {"state": "MAIN_MENU", "data": {}}
-        elif text_body == "2":
-            USER_STATES[from_number]["state"] = "REPORT_ORDER_ISSUE"
-            send_whatsapp_message(from_number, "Désolé d'entendre cela. Veuillez détailler votre problème ici (produit défectueux, retard, changement d'adresse, etc.) et un conseiller vous répondra dans les plus brefs délais :")
+    # 3. תפריט מורחב של אפשרויות אחרי הזמנה
+    elif current_state == "ORDER_MENU_OPTIONS":
+        if "remarque" in text_lower:
+            user_data["sub_topic"] = "הערה מיוחדת לגבי ההזמנה"
+            USER_STATES[from_number]["state"] = "COLLECTING_ORDER_TEXT"
+            send_whatsapp_message(from_number, "Veuillez écrire votre remarque ou modification demandée pour cette commande :")
+        elif "livraison" in text_lower:
+            user_data["sub_topic"] = "בעיה או שאלה לגבי המשלוח"
+            USER_STATES[from_number]["state"] = "COLLECTING_ORDER_TEXT"
+            send_whatsapp_message(from_number, "Veuillez détailler votre problème de livraison (retard, adresse, etc.) :")
+        elif "défectueux" in text_lower or "defectueux" in text_lower:
+            user_data["sub_topic"] = "מוצר פגום / בעיה במוצר"
+            USER_STATES[from_number]["state"] = "WAITING_FOR_PHOTO"
+            send_whatsapp_message(from_number, "Nous sommes désolés. Veuillez envoyer une photo du produit endommagé ici directement sur WhatsApp 📸 :")
         else:
-            send_whatsapp_message(from_number, "Veuillez choisir option 1 ou 2 :")
+            send_whatsapp_btn(from_number, "Veuillez cliquer sur un bouton :", ["Remarque spéciale 📝", "Livraison 🚚", "Produit défectueux ⚠️"])
 
-    # 4. Enregistrement d'un problème sur commande
-    elif current_state == "REPORT_ORDER_ISSUE":
+    # 4. קבלת טקסט חופשי (הערה או משלוח)
+    elif current_state == "COLLECTING_ORDER_TEXT":
         ticket = {
-            "topic": "בעיה בהזמנה קיימת (צרפתית)",
+            "topic": f"הזמנה קיימת - {user_data.get('sub_topic')}",
             "order_id": user_data.get("order_id"),
-            "site_info": user_data.get("raw_info", "Non récupéré"),
+            "customer_email": user_data.get("customer_email"),
+            "site_info": user_data.get("raw_info", "N/A"),
             "user_message": text_body
         }
         process_completed_ticket(from_number, ticket)
-        send_whatsapp_message(from_number, "Votre demande a bien été enregistrée. Un conseiller va vérifier la situation et reviendra vers vous très vite ! 💙")
+        send_whatsapp_message(from_number, "Votre demande a bien été enregistrée. Notre équipe revient vers vous très vite ! 💙")
         USER_STATES[from_number] = {"state": "MAIN_MENU", "data": {}}
 
-    # 5. Question générale
+    # 5. קבלת תמונה (מוצר פגום)
+    elif current_state == "WAITING_FOR_PHOTO":
+        photo_url = "Aucune image envoyée"
+        if message.get("type") == "image":
+            media_id = message["image"]["id"]
+            photo_url = get_media_url(media_id)
+            caption = message["image"].get("caption", "Sans texte")
+            text_body = f"[תמונה מצורפת] - כיתוב: {caption}"
+        else:
+            text_body = f"[הלקוח לא שלח תמונה, שלח טקסט]: {text_body}"
+
+        ticket = {
+            "topic": "הזמנה קיימת - מוצר פגום (צרפתית)",
+            "order_id": user_data.get("order_id"),
+            "customer_email": user_data.get("customer_email"),
+            "site_info": user_data.get("raw_info", "N/A"),
+            "user_message": text_body,
+            "photo_url": photo_url
+        }
+        process_completed_ticket(from_number, ticket)
+        send_whatsapp_message(from_number, "Merci pour la photo et les détails. Votre dossier a été transmis au service client, nous vous répondrons rapidement ! 💙")
+        USER_STATES[from_number] = {"state": "MAIN_MENU", "data": {}}
+
+    # 6. שאלה כללית
     elif current_state == "GENERAL_QA":
         ticket = {
             "topic": "שאלה כללית מהאתר (צרפתית)",
+            "customer_email": "לא צוינה הזמנה",
             "user_message": text_body
         }
         process_completed_ticket(from_number, ticket)
-        
-        general_success_msg = f"""Merci pour votre message. Nous avons bien reçu votre question et un membre de notre équipe vous répondra très rapidement ! 💙
-
-_(Écrivez *Début* pour revenir au menu principal)_"""
-        send_whatsapp_message(from_number, general_success_msg)
+        send_whatsapp_message(from_number, "Merci ! Nous avons bien reçu votre question et notre équipe vous répondra très rapidement. 💙")
         USER_STATES[from_number] = {"state": "MAIN_MENU", "data": {}}
 
     return make_response("EVENT_RECEIVED", 200)
 
 def process_completed_ticket(from_number, ticket):
-    """Enregistrement du ticket dans Google Sheets et alerte Admin"""
+    """שמירה בגוגל שיטס ושליחת סיכום לוואטסאפ של המנהל בלבד"""
     ticket["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ticket["user_phone"] = from_number
 
+    # 1. שמירה בגוגל שיטס
     if GOOGLE_SHEET_URL:
         try: requests.post(GOOGLE_SHEET_URL, json=ticket)
         except Exception as e: print(f"Sheet Error: {e}")
 
-    if ADMIN_PHONE:
-        summary = f"🚨 *פניית שירות חדשה בבוט הצרפתי!*\n\n📌 *סוג:* {ticket.get('topic')}\n👤 *טלפון:* {ticket.get('user_phone')}\n📦 *מספר הזמנה:* {ticket.get('order_id', 'ללא')}\n"
-        summary += f"💬 *תוכן הפנייה:* {ticket.get('user_message')}"
-        send_whatsapp_message(ADMIN_PHONE, summary)
+    # תמלול עברי מלא ומסודר למנהל בוואטסאפ
+    summary = f"""🚨 *פניית שירות חדשה מהאתר הצרפתי!*
 
-def send_whatsapp_message(to, text):
-    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
-    payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text}}
-    response = requests.post(url, json=payload, headers=headers)
-    print(f"Envoi à {to}: {response.status_code}")
+📌 *נושא:* {ticket.get('topic')}
+👤 *טלפון הלקוח:* {ticket.get('user_phone')}
+📧 *מייל הלקוח:* {ticket.get('customer_email')}
+📦 *מספר הזמנה:* {ticket.get('order_id', 'ללא')}
+📊 *סטטוס באתר:* {ticket.get('site_info', 'ללא')}
+💬 *תוכן הפנייה:* {ticket.get('user_message')}
+🖼️ *קישור לתמונה:* {ticket.get('photo_url', 'אין תמונה')}
+📅 *זמן:* {ticket.get('timestamp')}"""
+
+    # 2. שליחת התראה לוואטסאפ של המנהל
+    if ADMIN_PHONE:
+        send_whatsapp_message(ADMIN_PHONE, summary)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
