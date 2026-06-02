@@ -23,13 +23,13 @@ WC_CONSUMER_SECRET = os.environ.get("WC_CONSUMER_SECRET")
 USER_STATES = {}
 
 def get_welcome_menu():
-    return (
-        "👋 *Bonjour ! Bienvenue sur notre service client* ✨\n"
-        "Comment puis-je vous aider aujourd'hui ? Veuillez choisir une option :\n\n"
-        "1️⃣ *J'ai une question concernant une commande existante* 📦\n"
-        "2️⃣ *J'ai une autre question générale* ❓\n\n"
-        "💡 _Vous pouvez écrire *Début* à tout moment pour revenir ici._"
-    )
+    return f"""👋 *Bonjour ! Bienvenue sur notre service client* ✨
+Comment puis-je vous aider aujourd'hui ? Veuillez choisir une option :
+
+1️⃣ *J'ai une question concernant une commande existante* 📦
+2️⃣ *J'ai une autre question générale* ❓
+
+💡 _Vous pouvez écrire *Début* à tout moment pour revenir ici._"""
 
 def get_woocommerce_order(order_id):
     """Récupération de la commande depuis WordPress en temps réel"""
@@ -54,7 +54,7 @@ def get_woocommerce_order(order_id):
 
 @app.route("/", methods=["GET"])
 def home(): 
-    return "Le bot WhatsApp Français est en ligne !", 200
+    return "Le bot WhatsApp Français est en ligne et corrigé !", 200
 
 @app.route("/webhook", methods=["GET"])
 def verify():
@@ -73,7 +73,7 @@ def message_received():
     text_body = message["text"]["body"].strip() if message.get("type") == "text" else ""
     text_lower = text_body.lower()
 
-    # Mots-clés de réinitialisation (Français & Anglais)
+    # Mots-clés de réinitialisation
     if text_lower in ["debut", "début", "start", "menu", "bonjour", "salut"]:
         USER_STATES[from_number] = {"state": "MAIN_MENU", "data": {}}
         send_whatsapp_message(from_number, get_welcome_menu())
@@ -115,7 +115,104 @@ def message_received():
         if order_info == "NOT_FOUND":
             send_whatsapp_message(from_number, f"❌ Je n'ai trouvé aucune commande avec le numéro {order_id}. Veuillez vérifier le numéro et réessayer :")
         elif order_info is None:
-            # En cas de problème de connexion technique avec le site
             user_data["order_id"] = order_id
             USER_STATES[from_number]["state"] = "REPORT_ORDER_ISSUE"
-            send_whatsapp_message(from_number, f"Bien reçu, il s'agit de la commande {order_id}. Notre site subit un léger ralentissement et je n'ai pas pu récupérer le statut automatiquement.\n\
+            error_fallback_msg = f"""Bien reçu, il s'agit de la commande {order_id}. Notre site subit un léger ralentissement et je n'ai pas pu récupérer le statut automatiquement.
+
+Veuillez détailler votre demande ou votre problème concernant cette commande, un conseiller va prendre le relais :"""
+            send_whatsapp_message(from_number, error_fallback_msg)
+        else:
+            status_translations = {
+                "pending": "En attente de paiement 💳",
+                "processing": "En cours de préparation 📦",
+                "on-hold": "En attente ⏳",
+                "completed": "Terminée et expédiée ! 🚀",
+                "cancelled": "Annulée ❌",
+                "refunded": "Remboursée 💰",
+                "failed": "Échouée ❌"
+            }
+            
+            raw_status = order_info.get("status", "unknown")
+            translated_status = status_translations.get(raw_status, raw_status)
+            total_price = order_info.get("total", "0")
+            currency = order_info.get("currency", "€")
+            customer_name = order_info.get("billing", {}).get("first_name", "Client")
+            
+            success_msg = f"""Bonjour {customer_name}, j'ai trouvé votre commande ! 📜
+
+🔹 *Numéro de commande :* {order_id}
+🔹 *Statut actuel :* {translated_status}
+🔹 *Montant total :* {total_price} {currency}
+
+Tout est-il correct, ou avez-vous une autre question concernant cette commande ?
+1️⃣ Tout est correct, merci !
+2️⃣ J'ai un problème / besoin d'un conseiller"""
+
+            user_data["order_id"] = order_id
+            user_data["raw_info"] = f"Status: {translated_status}, Total: {total_price}"
+            USER_STATES[from_number]["state"] = "ORDER_FOLLOW_UP"
+            send_whatsapp_message(from_number, success_msg)
+
+    # 3. Options après affichage de la commande
+    elif current_state == "ORDER_FOLLOW_UP":
+        if text_body == "1":
+            send_whatsapp_message(from_number, "Ravi d'avoir pu vous aider ! 😊 Si vous avez besoin d'autre chose, écrivez simplement *Début*.")
+            USER_STATES[from_number] = {"state": "MAIN_MENU", "data": {}}
+        elif text_body == "2":
+            USER_STATES[from_number]["state"] = "REPORT_ORDER_ISSUE"
+            send_whatsapp_message(from_number, "Désolé d'entendre cela. Veuillez détailler votre problème ici (produit défectueux, retard, changement d'adresse, etc.) et un conseiller vous répondra dans les plus brefs délais :")
+        else:
+            send_whatsapp_message(from_number, "Veuillez choisir option 1 ou 2 :")
+
+    # 4. Enregistrement d'un problème sur commande
+    elif current_state == "REPORT_ORDER_ISSUE":
+        ticket = {
+            "topic": "בעיה בהזמנה קיימת (צרפתית)",
+            "order_id": user_data.get("order_id"),
+            "site_info": user_data.get("raw_info", "Non récupéré"),
+            "user_message": text_body
+        }
+        process_completed_ticket(from_number, ticket)
+        send_whatsapp_message(from_number, "Votre demande a bien été enregistrée. Un conseiller va vérifier la situation et reviendra vers vous très vite ! 💙")
+        USER_STATES[from_number] = {"state": "MAIN_MENU", "data": {}}
+
+    # 5. Question générale
+    elif current_state == "GENERAL_QA":
+        ticket = {
+            "topic": "שאלה כללית מהאתר (צרפתית)",
+            "user_message": text_body
+        }
+        process_completed_ticket(from_number, ticket)
+        
+        general_success_msg = f"""Merci pour votre message. Nous avons bien reçu votre question et un membre de notre équipe vous répondra très rapidement ! 💙
+
+_(Écrivez *Début* pour revenir au menu principal)_"""
+        send_whatsapp_message(from_number, general_success_msg)
+        USER_STATES[from_number] = {"state": "MAIN_MENU", "data": {}}
+
+    return make_response("EVENT_RECEIVED", 200)
+
+def process_completed_ticket(from_number, ticket):
+    """Enregistrement du ticket dans Google Sheets et alerte Admin"""
+    ticket["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ticket["user_phone"] = from_number
+
+    if GOOGLE_SHEET_URL:
+        try: requests.post(GOOGLE_SHEET_URL, json=ticket)
+        except Exception as e: print(f"Sheet Error: {e}")
+
+    if ADMIN_PHONE:
+        summary = f"🚨 *פניית שירות חדשה בבוט הצרפתי!*\n\n📌 *סוג:* {ticket.get('topic')}\n👤 *טלפון:* {ticket.get('user_phone')}\n📦 *מספר הזמנה:* {ticket.get('order_id', 'ללא')}\n"
+        summary += f"💬 *תוכן הפנייה:* {ticket.get('user_message')}"
+        send_whatsapp_message(ADMIN_PHONE, summary)
+
+def send_whatsapp_message(to, text):
+    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
+    payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text}}
+    response = requests.post(url, json=payload, headers=headers)
+    print(f"Envoi à {to}: {response.status_code}")
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
