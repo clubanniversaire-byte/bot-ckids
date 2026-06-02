@@ -32,15 +32,27 @@ Comment puis-je vous aider aujourd'hui ? Veuillez choisir une option :
 💡 _Vous pouvez écrire *Début* à tout moment pour revenir ici._"""
 
 def get_woocommerce_order(order_id):
-    """Récupération de la commande depuis WordPress en temps réel"""
+    """שיטת חיבור מעודכנת שעוקפת חסימות שרת (Parameters במקום Headers)"""
     if not WC_STORE_URL or not WC_CONSUMER_KEY or not WC_CONSUMER_SECRET:
         print("Erreur: Variables WooCommerce manquantes sur le serveur Render.")
         return None
         
-    url = f"{WC_STORE_URL.rstrip('/')}/wp-json/wc/v3/orders/{order_id}"
+    # בניית הקישור מחדש כאשר המפתחות מוזרקים ישירות לתוך הכתובת
+    base_url = f"{WC_STORE_URL.rstrip('/')}/wp-json/wc/v3/orders/{order_id}"
+    params = {
+        "consumer_key": WC_CONSUMER_KEY,
+        "consumer_secret": WC_CONSUMER_SECRET
+    }
+    
+    # שליחת הבקשה עם דפדפן מדומה (User-Agent) כדי שהשרת לא יחשוד
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
     
     try:
-        response = requests.get(url, auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET), timeout=8)
+        response = requests.get(base_url, params=params, headers=headers, timeout=10)
+        print(f"Tentative de connexion à l'API - Code retour: {response.status_code}")
+        
         if response.status_code == 200:
             return response.json()
         elif response.status_code == 404:
@@ -54,7 +66,7 @@ def get_woocommerce_order(order_id):
 
 @app.route("/", methods=["GET"])
 def home(): 
-    return "Le bot WhatsApp Français est en ligne et corrigé !", 200
+    return "Le bot WhatsApp Français est en ligne, méthode de contournement active !", 200
 
 @app.route("/webhook", methods=["GET"])
 def verify():
