@@ -2,15 +2,19 @@ import os
 import time
 import requests
 from datetime import datetime
-from flask import Flask, request, make_response
+from flask import Flask, request, make_response, send_from_directory
 
 app = Flask(__name__)
+
+# יצירת תיקייה זמנית לשמירת התמונות בשרת אם היא לא קיימת
+MEDIA_DIR = "stored_media"
+if not os.path.exists(MEDIA_DIR):
+    os.makedirs(MEDIA_DIR)
 
 # ==========================================
 # CONFIGURATION DES VARIABLES
 # ==========================================
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
-WHATSAPP_TOKEN = os.environ.get("ACCESS_TOKEN") # משמש להורדת מדיה
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "MY_SECRET_TOKEN_123")
 ADMIN_PHONE = os.environ.get("ADMIN_PHONE")
@@ -23,17 +27,42 @@ WC_CONSUMER_SECRET = os.environ.get("WC_CONSUMER_SECRET")
 
 USER_STATES = {}
 
-def get_media_url(media_id):
-    """שליפת הקישור הישיר לתמונה שנשלחה על ידי המשתמש"""
+def download_whatsapp_media(media_id):
+    """פונקציה שמורידה את התמונה מפייסבוק ושומרת אותה בשרת Render כדי שתהיה פתוחה לכולם"""
+    if not ACCESS_TOKEN:
+        return "Aucun token configuré"
+        
     url = f"https://graph.facebook.com/v20.0/{media_id}"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+    
     try:
+        # שלב 1: קבלת הקישור הזמני מפייסבוק
         res = requests.get(url, headers=headers)
-        if res.status_code == 200:
-            return res.json().get("url")
+        if res.status_code != 200:
+            return f"Erreur Facebook API: {res.status_code}"
+            
+        fb_url = res.json().get("url")
+        if not fb_url:
+            return "Impossible de trouver l'URL média"
+            
+        # שלב 2: הורדת הקובץ עצמו באמצעות ה-Token
+        media_res = requests.get(fb_url, headers=headers)
+        if media_res.status_code == 200:
+            filename = f"photo_{media_id}_{int(time.time())}.jpg"
+            filepath = os.path.join(MEDIA_DIR, filename)
+            
+            with open(filepath, "wb") as f:
+                f.write(media_res.content)
+                
+            # שלב 3: בניית קישור ישיר לשרת ה-Render שלך
+            # הקישור הזה יהיה פתוח לצפייה ישירה בלי שגיאות אבטחה
+            render_host = request.host_url.rstrip('/')
+            return f"{render_host}/media/{filename}"
+            
+        return f"Erreur téléchargement: {media_res.status_code}"
     except Exception as e:
-        print(f"Erreur media URL: {e}")
-    return None
+        print(f"Exception media download: {e}")
+        return "Erreur technique lors du téléchargement"
 
 def get_woocommerce_order(order_id):
     if not WC_STORE_URL or not WC_CONSUMER_KEY or not WC_CONSUMER_SECRET:
@@ -50,7 +79,6 @@ def get_woocommerce_order(order_id):
         return None
 
 def send_whatsapp_btn(to, text, buttons):
-    """שליחת כפתורים לחיצים בוואטסאפ (מקסימום 3 כפתורים)"""
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
     
@@ -58,7 +86,7 @@ def send_whatsapp_btn(to, text, buttons):
     for i, btn_text in enumerate(buttons):
         formatted_buttons.append({
             "type": "reply",
-            "reply": {"id": f"btn_{i+1}", "title": btn_text[:20]} # הגבלה של פייסבוק עד 20 תווים
+            "reply": {"id": f"btn_{i+1}", "title": btn_text[:20]}
         })
         
     payload = {
@@ -71,8 +99,7 @@ def send_whatsapp_btn(to, text, buttons):
             "action": {"buttons": formatted_buttons}
         }
     }
-    response = requests.post(url, json=payload, headers=headers)
-    print(f"Boutons envoyés à {to}: {response.status_code}")
+    requests.post(url, json=payload, headers=headers)
 
 def send_whatsapp_message(to, text):
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
@@ -81,7 +108,12 @@ def send_whatsapp_message(to, text):
     requests.post(url, json=payload, headers=headers)
 
 @app.route("/", methods=["GET"])
-def home(): return "Bot Français interactif sans emails actif !", 200
+def home(): return "Bot Français avec hébergement d'images actif !", 200
+
+# נתיב ייעודי שמאפשר לך ללחוץ על הקישור ולראות את התמונה השמורה
+@app.route("/media/<filename>", methods=["GET"])
+def serve_media(filename):
+    return send_from_directory(MEDIA_DIR, filename)
 
 @app.route("/webhook", methods=["GET"])
 def verify():
@@ -98,7 +130,6 @@ def message_received():
     message = data["entry"][0]["changes"][0]["value"]["messages"][0]
     from_number = message["from"]
     
-    # בדיקה אם מדובר בלחיצת כפתור או בטקסט רגיל
     text_body = ""
     if message.get("type") == "interactive" and message["interactive"].get("button_reply"):
         text_body = message["interactive"]["button_reply"]["title"].strip()
@@ -175,7 +206,7 @@ Avez-vous une demande concernant cette commande ? Choisissez une option :"""
             USER_STATES[from_number]["state"] = "ORDER_MENU_OPTIONS"
             send_whatsapp_btn(from_number, success_msg, ["Remarque spéciale 📝", "Livraison 🚚", "Produit défectueux ⚠️"])
 
-    # 3. תפריט מורחב של אפשרויות אחרי הזמנה
+    # 3. אפשרויות אחרי הזמנה
     elif current_state == "ORDER_MENU_OPTIONS":
         if "remarque" in text_lower:
             user_data["sub_topic"] = "הערה מיוחדת לגבי ההזמנה"
@@ -199,7 +230,8 @@ Avez-vous une demande concernant cette commande ? Choisissez une option :"""
             "order_id": user_data.get("order_id"),
             "customer_email": user_data.get("customer_email"),
             "site_info": user_data.get("raw_info", "N/A"),
-            "user_message": text_body
+            "user_message": text_body,
+            "photo_url": "Pas d'image"
         }
         process_completed_ticket(from_number, ticket)
         send_whatsapp_message(from_number, "Votre demande a bien été enregistrée. Notre équipe revient vers vous très vite ! 💙")
@@ -210,7 +242,8 @@ Avez-vous une demande concernant cette commande ? Choisissez une option :"""
         photo_url = "Aucune image envoyée"
         if message.get("type") == "image":
             media_id = message["image"]["id"]
-            photo_url = get_media_url(media_id)
+            # הורדה ושמירה של התמונה ישירות בשרת רנדר
+            photo_url = download_whatsapp_media(media_id)
             caption = message["image"].get("caption", "Sans texte")
             text_body = f"[תמונה מצורפת] - כיתוב: {caption}"
         else:
@@ -233,7 +266,8 @@ Avez-vous une demande concernant cette commande ? Choisissez une option :"""
         ticket = {
             "topic": "שאלה כללית מהאתר (צרפתית)",
             "customer_email": "לא צוינה הזמנה",
-            "user_message": text_body
+            "user_message": text_body,
+            "photo_url": "Pas d'image"
         }
         process_completed_ticket(from_number, ticket)
         send_whatsapp_message(from_number, "Merci ! Nous avons bien reçu votre question et notre équipe vous répondra très rapidement. 💙")
@@ -242,16 +276,13 @@ Avez-vous une demande concernant cette commande ? Choisissez une option :"""
     return make_response("EVENT_RECEIVED", 200)
 
 def process_completed_ticket(from_number, ticket):
-    """שמירה בגוגל שיטס ושליחת סיכום לוואטסאפ של המנהל בלבד"""
     ticket["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ticket["user_phone"] = from_number
 
-    # 1. שמירה בגוגל שיטס
     if GOOGLE_SHEET_URL:
         try: requests.post(GOOGLE_SHEET_URL, json=ticket)
         except Exception as e: print(f"Sheet Error: {e}")
 
-    # תמלול עברי מלא ומסודר למנהל בוואטסאפ
     summary = f"""🚨 *פניית שירות חדשה מהאתר הצרפתי!*
 
 📌 *נושא:* {ticket.get('topic')}
@@ -260,10 +291,9 @@ def process_completed_ticket(from_number, ticket):
 📦 *מספר הזמנה:* {ticket.get('order_id', 'ללא')}
 📊 *סטטוס באתר:* {ticket.get('site_info', 'ללא')}
 💬 *תוכן הפנייה:* {ticket.get('user_message')}
-🖼️ *קישור לתמונה:* {ticket.get('photo_url', 'אין תמונה')}
+🖼️ *קישור ישיר לתמונה:* {ticket.get('photo_url')}
 📅 *זמן:* {ticket.get('timestamp')}"""
 
-    # 2. שליחת התראה לוואטסאפ של המנהל
     if ADMIN_PHONE:
         send_whatsapp_message(ADMIN_PHONE, summary)
 
