@@ -83,7 +83,7 @@ def send_whatsapp_message(to, text):
     requests.post(url, json=payload, headers=headers)
 
 @app.route("/", methods=["GET"])
-def home(): return "Bot Français Google Sheets Correctif Actif !", 200
+def home(): return "Bot Français Google Sheets Flat JSON Actif !", 200
 
 @app.route("/media/<filename>", methods=["GET"])
 def serve_media(filename): return send_from_directory(MEDIA_DIR, filename)
@@ -139,7 +139,7 @@ def message_received():
     elif current_state == "WAITING_FOR_ORDER_ID":
         order_id = "".join(filter(str.isdigit, text_body))
         if not order_id:
-            send_whatsapp_message(from_number, "VWWVeuillez envoyer uniquement les chiffres de votre commande :")
+            send_whatsapp_message(from_number, "Veuillez envoyer uniquement les chiffres de votre commande :")
             return make_response("EVENT_RECEIVED", 200)
             
         send_whatsapp_message(from_number, "Je vérifie cela sur le site... Un instant ⏳")
@@ -250,14 +250,15 @@ Choisissez une option pour continuer :"""
     return make_response("EVENT_RECEIVED", 200)
 
 def process_completed_ticket(from_number, ticket):
-    """עיבוד הפנייה: שליחה נכונה כטופס לגוגל שיטס והתראת וואטסאפ למנהל"""
+    """עיבוד הפנייה: שליחת JSON שטוח ונקי לגוגל שיטס והתראת וואטסאפ למנהל"""
     ticket["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ticket["user_phone"] = from_number
 
-    # תיקון קריטי: שליחת הנתונים כ-Form Data ולא כ-JSON כדי שכל העמודות ייקלטו בגוגל שיטס
+    # החזרה ל-json=ticket בצירוף headers קשיחים כדי לוודא שגוגל שיטס יקרא את כל השדות בצורה נקייה
     if GOOGLE_SHEET_URL:
         try: 
-            requests.post(GOOGLE_SHEET_URL, data=ticket, timeout=7)
+            headers = {"Content-Type": "application/json"}
+            requests.post(GOOGLE_SHEET_URL, json=ticket, headers=headers, timeout=7)
         except Exception as e: 
             print(f"Sheet Error: {e}")
 
