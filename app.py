@@ -80,7 +80,15 @@ def send_whatsapp_message(to, text):
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text}}
-    requests.post(url, json=payload, headers=headers)
+    
+    try:
+        res = requests.post(url, json=payload, headers=headers)
+        # שורות אלו ידפיסו ללוגים של Render בדיוק מה פייסבוק חושבת על ההודעה!
+        print(f"Envoi WhatsApp à {to} - Status: {res.status_code}")
+        if res.status_code != 200:
+            print(f"Erreur WhatsApp API: {res.text}")
+    except Exception as e:
+        print(f"Erreur de connexion WhatsApp: {e}")
 
 @app.route("/", methods=["GET"])
 def home(): return "Bot Français Google Sheets Flat JSON Actif !", 200
