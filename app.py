@@ -25,6 +25,7 @@ WC_CONSUMER_KEY = os.environ.get("WC_CONSUMER_KEY")
 WC_CONSUMER_SECRET = os.environ.get("WC_CONSUMER_SECRET")
 
 USER_STATES = {}
+PROCESSED_MESSAGE_IDS = set()  # מנגנון למניעת כפילויות מריטרייז של פייסבוק
 
 def download_whatsapp_media(media_id):
     if not ACCESS_TOKEN: return "Aucun token configuré"
@@ -93,7 +94,11 @@ def send_whatsapp_template(to, template_name, variables):
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
     
-    parameters = [{"type": "text", "text": str(var)[:1000]} for var in variables]
+    # ניקוי קריטי: החלפת ירידות שורה ברווחים כדי למנוע שגיאה 400 מפייסבוק
+    cleaned_parameters = []
+    for var in variables:
+        cleaned_val = str(var).replace("\n", " ").replace("\r", " ").strip()
+        cleaned_parameters.append({"type": "text", "text": cleaned_val[:1000]})
     
     payload = {
         "messaging_product": "whatsapp",
@@ -105,7 +110,7 @@ def send_whatsapp_template(to, template_name, variables):
             "components": [
                 {
                     "type": "body",
-                    "parameters": parameters
+                    "parameters": cleaned_parameters
                 }
             ]
         }
@@ -139,6 +144,16 @@ def message_received():
 
     message = data["entry"][0]["changes"][0]["value"]["messages"][0]
     from_number = message["from"]
+    msg_id = message.get("id")
+
+    # חסימת הודעות כפולות (Retry) בזמן אמת
+    if msg_id in PROCESSED_MESSAGE_IDS:
+        print(f"Message {msg_id} déjà traité (Retry bloqué).")
+        return make_response("EVENT_RECEIVED", 200)
+    
+    PROCESSED_MESSAGE_IDS.add(msg_id)
+    if len(PROCESSED_MESSAGE_IDS) > 1000:  # שמירה על זיכרון נקי
+        PROCESSED_MESSAGE_IDS.clear()
     
     text_body = ""
     if message.get("type") == "interactive" and message["interactive"].get("button_reply"):
@@ -193,7 +208,7 @@ def message_received():
             status_translations = {
                 "pending": "En attente 💳", "processing": "En préparation 📦",
                 "on-hold": "En attente ⏳", "completed": "Expédiée ! 🚀",
-                "cancelled": "Annulée ❌", "refunded": "Remboursée 💰", "failed": "Échouée ❌"
+                "cancelled": "Annulée ❌", "refunded": "Remboursée 💰", "failed": "Échוée ❌"
             }
             raw_status = order_info.get("status", "unknown")
             translated_status = status_translations.get(raw_status, raw_status)
@@ -299,13 +314,13 @@ def process_completed_ticket(from_number, ticket):
         except Exception as e: 
             print(f"Sheet Error: {e}")
 
-    # טיפול נכון בתמונה: אם קיימת תמונה, נדביק את הקישור שלה בסוף הודעת הטקסט שמתקבלת ב-{{4}}
+    # טיפול בתמונה: ללא ירידות שורה (\n) כדי שלא ייחסם בפייסבוק
     msg_content = ticket.get('user_message', 'N/A')
     photo_url = ticket.get('photo_url', '')
     if photo_url and photo_url not in ["Pas d'image", "Aucune image"]:
-        msg_content += f"\n\n📸 קישור לתמונה: {photo_url}"
+        msg_content += f" | 📸 קישור לתמונה: {photo_url}"
 
-    # בניית רשימת המשתנים (בדיוק לפי הסדר של {{1}}, {{2}}, {{3}}, {{4}} בתבנית שיצרת)
+    # בניית רשימת המשתנים בסדר המדויק עבור התבנית ({{1}}, {{2}}, {{3}}, {{4}})
     variables = [
         ticket.get('topic', 'N/A'),
         ticket.get('user_phone', 'N/A'),
@@ -313,10 +328,9 @@ def process_completed_ticket(from_number, ticket):
         msg_content
     ]
 
-    # השהיה של שנייה למניעת חסימות בפייסבוק
     time.sleep(1)
 
-    # שליחת התבנית לוואטסאפ של המנהל (עוקף את חוק ה-24 שעות בהצלחה)
+    # שליחת התבנית למנהל
     if ADMIN_PHONE:
         send_whatsapp_template(ADMIN_PHONE, "admin_alert_ticket", variables)
 
