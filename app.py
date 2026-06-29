@@ -90,6 +90,37 @@ def send_whatsapp_message(to, text):
     except Exception as e:
         print(f"Erreur de connexion WhatsApp: {e}")
 
+def send_whatsapp_template(to, template_name, variables):
+    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
+    
+    # הפיכת רשימת המשתנים שלנו לפורמט שפייסבוק דורשת
+    parameters = [{"type": "text", "text": str(var)[:1000]} for var in variables]
+    
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": "he"}, # שפת התבנית שהגדרנו
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": parameters
+                }
+            ]
+        }
+    }
+    
+    try:
+        res = requests.post(url, json=payload, headers=headers)
+        print(f"Envoi Template à {to} - Status: {res.status_code}")
+        if res.status_code != 200:
+            print(f"Erreur Template API: {res.text}")
+    except Exception as e:
+        print(f"Erreur de connexion WhatsApp: {e}")
+
 @app.route("/", methods=["GET"])
 def home(): return "Bot Français Google Sheets Flat JSON Actif !", 200
 
