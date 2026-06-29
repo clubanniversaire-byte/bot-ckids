@@ -304,21 +304,20 @@ def process_completed_ticket(from_number, ticket):
     # בניית הסיכום בעברית לוואטסאפ של המנהל
     summary = f"""🚨 *פניית שירות חדשה מהאתר הצרפתי!*
 
-📌 *נושא:* {ticket.get('topic')}
-👤 *טלפון הלקוח:* {ticket.get('user_phone')}
-📧 *מייל הלקוח:* {ticket.get('customer_email')}
-📦 *מספר הזמנה:* {ticket.get('order_id')}
-📊 *סטטוס באתר:* {ticket.get('site_info')}
-💬 *תוכן הפנייה:* {ticket.get('user_message')}
-🖼️ *קישור ישיר לתמונה:* {ticket.get('photo_url')}
-📅 *זמן:* {ticket.get('timestamp')}"""
+# בניית רשימת המשתנים (בדיוק לפי הסדר של {{1}}, {{2}} וכו' בתבנית שיצרנו)
+    variables = [
+        ticket.get('topic', 'N/A'),
+        ticket.get('user_phone', 'N/A'),
+        ticket.get('order_id', 'N/A'),
+        ticket.get('user_message', 'N/A')
+    ]
 
     # השהיה של שנייה למניעת חסימת כפל הודעות מהירה בפייסבוק
     time.sleep(1)
 
-    # שליחת הודעת וואטסאפ למנהל
+    # שליחת התבנית לוואטסאפ של המנהל (עוקף את חוק ה-24 שעות)
     if ADMIN_PHONE:
-        send_whatsapp_message(ADMIN_PHONE, summary)
+        send_whatsapp_template(ADMIN_PHONE, "admin_alert_ticket", variables)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
