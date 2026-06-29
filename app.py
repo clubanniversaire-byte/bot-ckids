@@ -28,7 +28,7 @@ WC_CONSUMER_SECRET = os.environ.get("WC_CONSUMER_SECRET")
 USER_STATES = {}
 PROCESSED_MESSAGE_IDS = set()
 
-def download_whatsapp_media(media_id):
+def download_whatsapp_media(media_id, host_url): # <--- הוספנו כאן פרמטר
     if not ACCESS_TOKEN: return "Aucun token configuré"
     url = f"https://graph.facebook.com/v20.0/{media_id}"
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
@@ -44,7 +44,9 @@ def download_whatsapp_media(media_id):
             filepath = os.path.join(MEDIA_DIR, filename)
             with open(filepath, "wb") as f:
                 f.write(media_res.content)
-            render_host = request.host_url.rstrip('/')
+            
+            # עכשיו אנחנו משתמשים במשתנה שהעברנו, ולא באובייקט request
+            render_host = host_url.rstrip('/') 
             return f"{render_host}/media/{filename}"
         return f"Erreur téléch.: {media_res.status_code}"
     except Exception as e:
@@ -258,17 +260,19 @@ Choisissez une option pour continuer :"""
         send_whatsapp_message(from_number, "Votre demande a bien été enregistrée ! 💙")
         USER_STATES[from_number] = {"state": "MAIN_MENU", "data": {}}
 
-    # 5. Collecte Photo - שימוש בתהליך רקע למניעת כפילויות של פייסבוק!
+    # 5. Collecte Photo - תהליך רקע
     elif current_state == "WAITING_FOR_PHOTO":
-        # נאפס את הסטטוס מיד כדי שהמשתמש יהיה מוכן לפעולה הבאה
         USER_STATES[from_number] = {"state": "MAIN_MENU", "data": {}}
         
-        # פונקציה פנימית שתרוץ מאחורי הקלעים
-        def process_photo_in_background(msg, usr_data, phone):
+        # אנחנו שומרים את ה-URL כאן, כל עוד אנחנו בתהליך הראשי
+        current_host_url = request.host_url
+        
+        def process_photo_in_background(msg, usr_data, phone, host_url):
             photo_url = "Aucune image"
             if msg.get("type") == "image":
                 media_id = msg["image"]["id"]
-                photo_url = download_whatsapp_media(media_id)
+                # מעבירים את ה-url לפונקציית ההורדה
+                photo_url = download_whatsapp_media(media_id, host_url) 
                 caption = msg["image"].get("caption", "Sans texte")
                 txt_body = f"[תמונה מצורפת] - כיתוב: {caption}"
             else:
@@ -285,10 +289,9 @@ Choisissez une option pour continuer :"""
             process_completed_ticket(phone, ticket)
             send_whatsapp_message(phone, "Merci pour la photo. Votre dossier a été transmis ! 💙")
 
-        # הפעלת הפונקציה מאחורי הקלעים
-        threading.Thread(target=process_photo_in_background, args=(message, user_data.copy(), from_number)).start()
+        # הפעלת הפונקציה מאחורי הקלעים - והפעם אנחנו מעבירים גם את ה-current_host_url
+        threading.Thread(target=process_photo_in_background, args=(message, user_data.copy(), from_number, current_host_url)).start()
         
-        # אנחנו מחזירים תשובה לפייסבוק *מיד* - אין יותר Timeout ואין Retries!
         return make_response("EVENT_RECEIVED", 200)
 
     # 6. Question générale
