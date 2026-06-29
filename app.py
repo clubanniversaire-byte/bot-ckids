@@ -83,7 +83,6 @@ def send_whatsapp_message(to, text):
     
     try:
         res = requests.post(url, json=payload, headers=headers)
-        # שורות אלו ידפיסו ללוגים של Render בדיוק מה פייסבוק חושבת על ההודעה!
         print(f"Envoi WhatsApp à {to} - Status: {res.status_code}")
         if res.status_code != 200:
             print(f"Erreur WhatsApp API: {res.text}")
@@ -94,7 +93,6 @@ def send_whatsapp_template(to, template_name, variables):
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
     
-    # הפיכת רשימת המשתנים שלנו לפורמט שפייסבוק דורשת
     parameters = [{"type": "text", "text": str(var)[:1000]} for var in variables]
     
     payload = {
@@ -103,7 +101,7 @@ def send_whatsapp_template(to, template_name, variables):
         "type": "template",
         "template": {
             "name": template_name,
-            "language": {"code": "he"}, # שפת התבנית שהגדרנו
+            "language": {"code": "he"},
             "components": [
                 {
                     "type": "body",
@@ -289,11 +287,11 @@ Choisissez une option pour continuer :"""
     return make_response("EVENT_RECEIVED", 200)
 
 def process_completed_ticket(from_number, ticket):
-    """עיבוד הפנייה: שליחת JSON שטוח ונקי לגוגל שיטס והתראת וואטסאפ למנהל"""
+    """עיבוד הפנייה: שליחת JSON שטוח ונקי לגוגל שיטס והתראת תבנית וואטסאפ למנהל"""
     ticket["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ticket["user_phone"] = from_number
 
-    # החזרה ל-json=ticket בצירוף headers קשיחים כדי לוודא שגוגל שיטס יקרא את כל השדות בצורה נקייה
+    # שליחה לגוגל שיטס
     if GOOGLE_SHEET_URL:
         try: 
             headers = {"Content-Type": "application/json"}
@@ -301,21 +299,24 @@ def process_completed_ticket(from_number, ticket):
         except Exception as e: 
             print(f"Sheet Error: {e}")
 
-    # בניית הסיכום בעברית לוואטסאפ של המנהל
-    summary = f"""🚨 *פניית שירות חדשה מהאתר הצרפתי!*
+    # טיפול נכון בתמונה: אם קיימת תמונה, נדביק את הקישור שלה בסוף הודעת הטקסט שמתקבלת ב-{{4}}
+    msg_content = ticket.get('user_message', 'N/A')
+    photo_url = ticket.get('photo_url', '')
+    if photo_url and photo_url not in ["Pas d'image", "Aucune image"]:
+        msg_content += f"\n\n📸 קישור לתמונה: {photo_url}"
 
-# בניית רשימת המשתנים (בדיוק לפי הסדר של {{1}}, {{2}} וכו' בתבנית שיצרנו)
+    # בניית רשימת המשתנים (בדיוק לפי הסדר של {{1}}, {{2}}, {{3}}, {{4}} בתבנית שיצרת)
     variables = [
         ticket.get('topic', 'N/A'),
         ticket.get('user_phone', 'N/A'),
         ticket.get('order_id', 'N/A'),
-        ticket.get('user_message', 'N/A')
+        msg_content
     ]
 
-    # השהיה של שנייה למניעת חסימת כפל הודעות מהירה בפייסבוק
+    # השהיה של שנייה למניעת חסימות בפייסבוק
     time.sleep(1)
 
-    # שליחת התבנית לוואטסאפ של המנהל (עוקף את חוק ה-24 שעות)
+    # שליחת התבנית לוואטסאפ של המנהל (עוקף את חוק ה-24 שעות בהצלחה)
     if ADMIN_PHONE:
         send_whatsapp_template(ADMIN_PHONE, "admin_alert_ticket", variables)
 
